@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "config.h"
 #include "protocol.h"
+#include "trust_store.h"
 
 // Heltec library
 #include "heltec.h"
@@ -123,6 +124,16 @@ static void handleSerial() {
         Serial.print("Trust reset for ");
         Serial.println(who);
         return;
+    if (line == "trust list") {
+    Serial.print(trustListHuman());
+    return;
+  }
+
+  if (line == "trust reset-all") {
+    if (trustResetAll()) Serial.println("Trust cleared.");
+    else Serial.println("ERROR: trust reset-all failed");
+    return;
+  }
       }
     }
     Serial.println("No pinned entry found.");
@@ -146,6 +157,11 @@ void setup() {
   Serial.print("LoRa frequency Hz: ");
   Serial.println(LORA_FREQUENCY_HZ);
   Serial.println("Ready. Type: send alice bob 1234");
+    if (!trustInit()) {
+    Serial.println("ERROR: LittleFS trustInit failed");
+  } else {
+    Serial.println("LittleFS trust store ready");
+  }
 }
 
 void loop() {
