@@ -286,22 +286,60 @@ void setup() {
 void loop() {
   handleSerial();
 
-  int packetSize = Heltec.LoRa.parsePacket();
+   int packetSize = Heltec.LoRa.parsePacket();
   if (packetSize) {
     std::vector<uint8_t> buf(packetSize);
-    for (int i=0;i<packetSize;i++) buf[i] = (uint8_t)Heltec.LoRa.read();
+    for (int i = 0; i < packetSize; i++) buf[i] = (uint8_t)Heltec.LoRa.read();
 
     Serial.print("RX bytes=");
     Serial.println(packetSize);
 
-    // Minimal decode: show first few bytes
-    if (buf.size() >= 5) {
-      uint8_t ver = buf[0];
-      uint8_t type = buf[1];
-      Serial.print("ver=");
-      Serial.print(ver);
-      Serial.print(" type=");
-      Serial.println(type);
+    RxTxParsed p;
+    if (!parseTxPacket(buf, p)) {
+      Serial.println("RX: parse failed (not a valid TX packet)");
+      return;
+    }
+
+    // Pin or block based on senderId+fp8
+    uint8_t pinnedFp8[8];
+    bool hasPinned = trustLookupFp8(p.sender, pinnedFp8);
+
+    if (!hasPinned) {
+      if (trustPinFp8(p.sender, p.fp8)) {
+        Serial.print("TRUST PINNED sender=");
+        Serial.print(p.sender);
+        Serial.print(" fp8=");
+        Serial.println(fp8ToHex(p.fp8));
+      } else {
+        Serial.println("ERROR: failed to pin trust (filesystem/write error)");
+      }
+    } else if (!fp8Equal(pinnedFp8, p.fp8)) {
+      Serial.print("TRUST BLOCKED sender=");
+      Serial.print(p.sender);
+      Serial.print(" pinned=");
+      Serial.print(fp8ToHex(pinnedFp8));
+      Serial.print(" got=");
+      Serial.println(fp8ToHex(p.fp8));
+      return; // BLOCK: do not process further
+    } else {
+      Serial.print("TRUST OK sender=");
+      Serial.print(p.sender);
+      Serial.print(" fp8=");
+      Serial.println(fp8ToHex(p.fp8));
+    }
+
+    // If we reach here, trust passed (or was newly pinned)
+    Serial.print("TX ");
+    Serial.print(p.sender);
+    Serial.print(" -> ");
+    Serial.print(p.receiver);
+    Serial.print(" amountMinor=");
+    Serial.print(p.amountMinor);
+    Serial.print(" nonce=");
+    Serial.println(p.nonce);
+
+    // Signature verification will go here later (when sigLen > 0 and public keys exist)
+  }
     }
   }
 }
