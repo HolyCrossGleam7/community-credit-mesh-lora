@@ -282,7 +282,7 @@ void setup() {
 void loop() {
   handleSerial();
 
-   int packetSize = Heltec.LoRa.parsePacket();
+  int packetSize = Heltec.LoRa.parsePacket();
   if (packetSize) {
     std::vector<uint8_t> buf(packetSize);
     for (int i = 0; i < packetSize; i++) buf[i] = (uint8_t)Heltec.LoRa.read();
@@ -334,8 +334,9 @@ void loop() {
     Serial.print(" nonce=");
     Serial.println(p.nonce);
 
-    // Signature verification will go here later (when sigLen > 0 and public keys exist)
+    // Signature verification will go here later
   }
+}
     }
   }
 }
