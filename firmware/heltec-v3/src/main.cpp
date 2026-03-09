@@ -34,6 +34,8 @@ struct RxTxParsed {
   uint8_t fp8[8];
   uint8_t sigLen;
   size_t sigOff;
+  uint8_t pubLen;
+  uint8_t pub65[65];
 };
 
 static bool parseTxPacket(const std::vector<uint8_t>& buf, RxTxParsed& out) {
@@ -72,10 +74,17 @@ static bool parseTxPacket(const std::vector<uint8_t>& buf, RxTxParsed& out) {
   for (int i = 0; i < 8; i++) out.fp8[i] = buf[off + i];
   off += 8;
 
+  // pubkey length + pubkey bytes
+  out.pubLen = buf[off];
+  off += 1;
+  if (out.pubLen != 65) return false;
+  if (off + 65 > buf.size()) return false;
+  for (int i = 0; i < 65; i++) out.pub65[i] = buf[off + i];
+  off += 65;
+
+  // signature length + signature bytes
   out.sigLen = buf[off];
   off += 1;
-
-  // signature bytes may be 0 for now (your current sender uses sigLen=0)
   if (off + out.sigLen > buf.size()) return false;
 
   out.sigOff = off;
@@ -145,7 +154,24 @@ static void sendTx(const String& sender, const String& receiver, int32_t amountM
   auto canonical = buildCanonical(tx);
 
   std::vector<uint8_t> packet = canonical;
-  packet.push_back(0); // signatureLen = 0
+    auto canonical = buildCanonical(tx);
+
+  std::vector<uint8_t> packet = canonical;
+
+  // Append pubkey (65 bytes)
+  packet.push_back(65);
+  const uint8_t* pub = keysPub65();
+  for (int i = 0; i < 65; i++) packet.push_back(pub[i]);
+
+  // Append DER signature over canonical bytes
+  uint8_t sigDer[80];
+  size_t sigLen = 0;
+  if (!keysSignSha256(canonical.data(), canonical.size(), sigDer, sizeof(sigDer), sigLen) || sigLen == 0 || sigLen > 255) {
+    Serial.println("ERROR: signing failed; not sending");
+    return;
+  }
+  packet.push_back((uint8_t)sigLen);
+  for (size_t i = 0; i < sigLen; i++) packet.push_back(sigDer[i]);
 
   Heltec.LoRa.beginPacket();
   Heltec.LoRa.write(packet.data(), packet.size());
