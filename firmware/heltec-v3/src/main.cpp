@@ -11,6 +11,115 @@
 // Next step: persist to NVS/LittleFS.
 #include "trust_store.h"
 
+// Add these helper functions near the top of main.cpp (after includes), before setup():
+
+static bool readU32BE(const std::vector<uint8_t>& b, size_t off, uint32_t& out) {
+  if (off + 4 > b.size()) return false;
+  out = ((uint32_t)b[off] << 24) | ((uint32_t)b[off + 1] << 16) | ((uint32_t)b[off + 2] << 8) | ((uint32_t)b[off + 3]);
+  return true;
+}
+
+static bool readI32BE(const std::vector<uint8_t>& b, size_t off, int32_t& out) {
+  uint32_t u = 0;
+  if (!readU32BE(b, off, u)) return false;
+  out = (int32_t)u;
+  return true;
+}
+
+struct RxTxParsed {
+  uint8_t ver;
+  uint8_t type;
+  uint8_t flags;
+  String sender;
+  String receiver;
+  int32_t amountMinor;
+  uint32_t nonce;
+  uint8_t fp8[8];
+  uint8_t sigLen;
+  size_t sigOff;
+};
+
+static bool parseTxPacket(const std::vector<uint8_t>& buf, RxTxParsed& out) {
+  // Must have at least header bytes: ver,type,flags,senderLen,receiverLen
+  if (buf.size() < 5) return false;
+
+  out.ver = buf[0];
+  out.type = buf[1];
+  out.flags = buf[2];
+  uint8_t senderLen = buf[3];
+  uint8_t receiverLen = buf[4];
+
+  if (out.ver != PROTO_VERSION) return false;
+  if (out.type != MSG_TX) return false;
+  if (senderLen > 20 || receiverLen > 20) return false;
+
+  size_t off = 5;
+  if (off + senderLen + receiverLen > buf.size()) return false;
+
+  out.sender = "";
+  out.receiver = "";
+  for (uint8_t i = 0; i < senderLen; i++) out.sender += (char)buf[off + i];
+  off += senderLen;
+  for (uint8_t i = 0; i < receiverLen; i++) out.receiver += (char)buf[off + i];
+  off += receiverLen;
+
+  // amountMinor (int32) + nonce (uint32) + fp8 (8 bytes) + sigLen (1 byte)
+  if (off + 4 + 4 + 8 + 1 > buf.size()) return false;
+
+  if (!readI32BE(buf, off, out.amountMinor)) return false;
+  off += 4;
+
+  if (!readU32BE(buf, off, out.nonce)) return false;
+  off += 4;
+
+  for (int i = 0; i < 8; i++) out.fp8[i] = buf[off + i];
+  off += 8;
+
+  out.sigLen = buf[off];
+  off += 1;
+
+  // signature bytes may be 0 for now (your current sender uses sigLen=0)
+  if (off + out.sigLen > buf.size()) return false;
+
+  out.sigOff = off;
+  return true;
+}
+
+static void enforcePinOrBlock(const String& senderId, const uint8_t fp8[8]) {
+  uint8_t pinnedFp8[8];
+  bool hasPinned = trustLookupFp8(senderId, pinnedFp8);
+
+  if (!hasPinned) {
+    // First time seen: pin it
+    if (trustPinFp8(senderId, fp8)) {
+      Serial.print("TRUST PINNED sender=");
+      Serial.print(senderId);
+      Serial.print(" fp8=");
+      Serial.println(fp8ToHex(fp8));
+    } else {
+      Serial.println("ERROR: failed to pin trust (filesystem/write error)");
+    }
+    return;
+  }
+
+  if (!fp8Equal(pinnedFp8, fp8)) {
+    Serial.print("TRUST BLOCKED sender=");
+    Serial.print(senderId);
+    Serial.print(" pinned=");
+    Serial.print(fp8ToHex(pinnedFp8));
+    Serial.print(" got=");
+    Serial.println(fp8ToHex(fp8));
+    // BLOCK by returning; caller should not process the transaction further
+    // (caller will decide behavior, see RX loop code below)
+    return;
+  }
+
+  Serial.print("TRUST OK sender=");
+  Serial.print(senderId);
+  Serial.print(" fp8=");
+  Serial.println(fp8ToHex(fp8));
+}
+
 static void printFp8(const uint8_t fp8[8]) {
   for (int i=0;i<8;i++) {
     if (fp8[i] < 16) Serial.print("0");
