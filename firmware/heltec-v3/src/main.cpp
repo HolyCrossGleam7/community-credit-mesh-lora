@@ -8,11 +8,7 @@
 
 // Simple pinned trust store in RAM for now (manual starter).
 // Next step: persist to NVS/LittleFS.
-struct Pinned {
-  String sender;
-  uint8_t fp8[8];
-};
-static std::vector<Pinned> pinned;
+#include "trust_store.h"
 
 static void printFp8(const uint8_t fp8[8]) {
   for (int i=0;i<8;i++) {
@@ -95,10 +91,12 @@ static void sendTx(const String& sender, const String& receiver, int32_t amountM
 
 static void handleSerial() {
   if (!Serial.available()) return;
+
   String line = Serial.readStringUntil('\n');
   line.trim();
   if (line.length() == 0) return;
 
+  // ---- SEND ----
   if (line.startsWith("send ")) {
     // send alice bob 1234
     int p1 = line.indexOf(' ');
@@ -115,35 +113,46 @@ static void handleSerial() {
     return;
   }
 
-  if (line.startsWith("trust reset ")) {
-    String who = line.substring(String("trust reset ").length());
-    who.trim();
-    for (size_t i=0;i<pinned.size();i++) {
-      if (pinned[i].sender == who) {
-        pinned.erase(pinned.begin() + i);
-        Serial.print("Trust reset for ");
-        Serial.println(who);
-        return;
-    if (line == "trust list") {
+  // ---- TRUST: LIST ----
+  if (line == "trust list") {
     Serial.print(trustListHuman());
     return;
   }
 
+  // ---- TRUST: RESET ALL ----
   if (line == "trust reset-all") {
     if (trustResetAll()) Serial.println("Trust cleared.");
     else Serial.println("ERROR: trust reset-all failed");
     return;
   }
-      }
+
+  // ---- TRUST: RESET ONE ----
+  if (line.startsWith("trust reset ")) {
+    String who = line.substring(String("trust reset ").length());
+    who.trim();
+
+    if (who.length() == 0) {
+      Serial.println("Usage: trust reset <sender>");
+      return;
     }
-    Serial.println("No pinned entry found.");
+
+    if (trustReset(who)) {
+      Serial.print("Trust reset for ");
+      Serial.println(who);
+    } else {
+      Serial.println("ERROR: trust reset failed (filesystem/write error)");
+    }
     return;
   }
 
+  // ---- HELP ----
   Serial.println("Commands:");
   Serial.println("  send <sender> <receiver> <amountMinor>");
+  Serial.println("  trust list");
   Serial.println("  trust reset <sender>");
+  Serial.println("  trust reset-all");
 }
+
 
 void setup() {
   Serial.begin(115200);
