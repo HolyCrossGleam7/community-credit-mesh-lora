@@ -91,6 +91,57 @@ static bool parseTxPacket(const std::vector<uint8_t>& buf, RxTxParsed& out) {
   return true;
 }
 
+#include <mbedtls/pk.h>
+#include <mbedtls/ecp.h>
+#include <mbedtls/sha256.h>
+
+// Verify DER ECDSA signature using a 65-byte uncompressed P-256 pubkey.
+// pub65 must be: 0x04 || X(32) || Y(32)
+static bool verifyTxSigPub65(const std::vector<uint8_t>& canonical,
+                             const uint8_t pub65[65],
+                             const uint8_t* sigDer,
+                             size_t sigDerLen) {
+  if (canonical.empty()) return false;
+  if (sigDerLen == 0) return false;
+  if (pub65[0] != 0x04) return false;
+
+  // Hash canonical bytes
+  uint8_t h[32];
+  if (mbedtls_sha256_ret(canonical.data(), canonical.size(), h, 0 /*is224*/) != 0) {
+    return false;
+  }
+
+  // Build an mbedTLS public key from pub65
+  mbedtls_pk_context pk;
+  mbedtls_pk_init(&pk);
+
+  int rc = mbedtls_pk_setup(&pk, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
+  if (rc != 0) {
+    mbedtls_pk_free(&pk);
+    return false;
+  }
+
+  mbedtls_ecp_keypair* ec = mbedtls_pk_ec(pk);
+  rc = mbedtls_ecp_group_load(&ec->grp, MBEDTLS_ECP_DP_SECP256R1);
+  if (rc != 0) {
+    mbedtls_pk_free(&pk);
+    return false;
+  }
+
+  // Parse point from binary
+  rc = mbedtls_ecp_point_read_binary(&ec->grp, &ec->Q, pub65, 65);
+  if (rc != 0) {
+    mbedtls_pk_free(&pk);
+    return false;
+  }
+
+  // Verify DER signature over SHA256 hash
+  rc = mbedtls_pk_verify(&pk, MBEDTLS_MD_SHA256, h, 0, sigDer, sigDerLen);
+
+  mbedtls_pk_free(&pk);
+  return rc == 0;
+}
+
 static void printFp8(const uint8_t fp8[8]) {
   for (int i=0;i<8;i++) {
     if (fp8[i] < 16) Serial.print("0");
