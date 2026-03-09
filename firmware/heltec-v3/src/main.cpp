@@ -139,8 +139,9 @@ static void sendTx(const String& sender, const String& receiver, int32_t amountM
   tx.nonce = esp_random();
 
   // Placeholder fingerprint for now (TODO: derive from real public key)
-  for (int i=0;i<8;i++) tx.fp8[i] = (uint8_t)(esp_random() & 0xFF);
-
+   const uint8_t* fp = keysFp8();
+  for (int i = 0; i < 8; i++) tx.fp8[i] = fp[i];
+  
   auto canonical = buildCanonical(tx);
 
   std::vector<uint8_t> packet = canonical;
@@ -242,6 +243,12 @@ void setup() {
     Serial.println("ERROR: LittleFS trustInit failed");
   } else {
     Serial.println("LittleFS trust store ready");
+  }
+    if (!keysInit()) {
+    Serial.println("ERROR: keysInit failed");
+  } else {
+    Serial.print("Device fp8=");
+    Serial.println(keysFp8Hex());
   }
 }
 
