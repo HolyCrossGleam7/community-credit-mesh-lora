@@ -138,7 +138,7 @@ static void sendTx(const String& sender, const String& receiver, int32_t amountM
   tx.amountMinor = amountMinor;
   tx.nonce = esp_random();
 
-  // Placeholder fingerprint for now (TODO: derive from real public key)
+  // Placeholder fingerprint for now (TODO: derive from stable device fp8)
    const uint8_t* fp = keysFp8();
   for (int i = 0; i < 8; i++) tx.fp8[i] = fp[i];
   
