@@ -374,6 +374,29 @@ void loop() {
       Serial.println(fp8ToHex(p.fp8));
     }
 
+        // ---- SIGNATURE VERIFY ----
+    // Rebuild canonical bytes from parsed fields (must match what sender signed)
+    TxFields txv;
+    txv.sender = p.sender;
+    txv.receiver = p.receiver;
+    txv.amountMinor = p.amountMinor;
+    txv.nonce = p.nonce;
+    for (int i = 0; i < 8; i++) txv.fp8[i] = p.fp8[i];
+
+    std::vector<uint8_t> canonical = buildCanonical(txv);
+
+    const uint8_t* sigPtr = buf.data() + p.sigOff;
+    size_t sigLen = p.sigLen;
+
+    if (!verifyTxSigPub65(canonical, p.pub65, sigPtr, sigLen)) {
+      Serial.print("SIG BAD sender=");
+      Serial.println(p.sender);
+      return; // BLOCK
+    } else {
+      Serial.print("SIG OK sender=");
+      Serial.println(p.sender);
+    }
+
     // If we reach here, trust passed (or was newly pinned)
     Serial.print("TX ");
     Serial.print(p.sender);
