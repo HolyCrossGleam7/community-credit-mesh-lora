@@ -7,10 +7,6 @@
 // Heltec library
 #include "heltec.h"
 
-// Simple pinned trust store in RAM for now (manual starter).
-// Next step: persist to NVS/LittleFS.
-#include "trust_store.h"
-
 // Add these helper functions near the top of main.cpp (after includes), before setup():
 
 static bool readU32BE(const std::vector<uint8_t>& b, size_t off, uint32_t& out) {
