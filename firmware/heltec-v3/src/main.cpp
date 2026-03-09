@@ -3,6 +3,7 @@
 #include "config.h"
 #include "protocol.h"
 #include "trust_store.h"
+#include "device_keys.h"
 
 // Heltec library
 #include "heltec.h"
