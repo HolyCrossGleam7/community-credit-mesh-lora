@@ -1,5 +1,5 @@
 #include <Arduino.h>
-
+#include <vector>
 #include "config.h"
 #include "protocol.h"
 #include "trust_store.h"
