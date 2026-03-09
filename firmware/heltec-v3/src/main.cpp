@@ -81,41 +81,6 @@ static bool parseTxPacket(const std::vector<uint8_t>& buf, RxTxParsed& out) {
   return true;
 }
 
-static void enforcePinOrBlock(const String& senderId, const uint8_t fp8[8]) {
-  uint8_t pinnedFp8[8];
-  bool hasPinned = trustLookupFp8(senderId, pinnedFp8);
-
-  if (!hasPinned) {
-    // First time seen: pin it
-    if (trustPinFp8(senderId, fp8)) {
-      Serial.print("TRUST PINNED sender=");
-      Serial.print(senderId);
-      Serial.print(" fp8=");
-      Serial.println(fp8ToHex(fp8));
-    } else {
-      Serial.println("ERROR: failed to pin trust (filesystem/write error)");
-    }
-    return;
-  }
-
-  if (!fp8Equal(pinnedFp8, fp8)) {
-    Serial.print("TRUST BLOCKED sender=");
-    Serial.print(senderId);
-    Serial.print(" pinned=");
-    Serial.print(fp8ToHex(pinnedFp8));
-    Serial.print(" got=");
-    Serial.println(fp8ToHex(fp8));
-    // BLOCK by returning; caller should not process the transaction further
-    // (caller will decide behavior, see RX loop code below)
-    return;
-  }
-
-  Serial.print("TRUST OK sender=");
-  Serial.print(senderId);
-  Serial.print(" fp8=");
-  Serial.println(fp8ToHex(fp8));
-}
-
 static void printFp8(const uint8_t fp8[8]) {
   for (int i=0;i<8;i++) {
     if (fp8[i] < 16) Serial.print("0");
