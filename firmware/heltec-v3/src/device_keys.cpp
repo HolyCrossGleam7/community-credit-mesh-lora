@@ -2,6 +2,7 @@
 
 #include <LittleFS.h>
 #include <Arduino.h>
+#include <vector>
 #include <mbedtls/ecp.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/ctr_drbg.h>
