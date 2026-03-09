@@ -1,4 +1,5 @@
 #include <Arduino.h>
+
 #include "config.h"
 #include "protocol.h"
 #include "trust_store.h"
