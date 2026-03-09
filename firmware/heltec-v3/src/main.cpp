@@ -337,6 +337,3 @@ void loop() {
     // Signature verification will go here later
   }
 }
-    }
-  }
-}
