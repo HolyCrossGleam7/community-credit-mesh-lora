@@ -43,3 +43,29 @@ Signature algorithm:
 ## Replay protection
 Device keeps a small cache per senderId of recently seen nonces.
 - If same senderId+nonce repeats: reject.
+
+---
+
+### Type 0x03 — COLD_WALLET_OP
+
+Cold wallet operations broadcast over LoRa to sync item storage across the mesh.
+
+#### Subtypes (in `flags` byte):
+- `0x01` = FREEZE (credits → items)
+- `0x02` = THAW (items → credits, manual price)
+
+#### Body (COLD_WALLET_OP)
+- `senderId` (N bytes, UTF-8)
+- `subtype` (1 byte) — FREEZE or THAW
+- `itemNameLen` (1 byte) (max 20)
+- `itemName` (variable, UTF-8)
+- `quantity` (uint16, big-endian)
+- `creditValueMinor` (int32, big-endian)
+  - For FREEZE: total credits spent
+  - For THAW: price per unit set by user (manual — user decides the value)
+- `nonce` (uint32, big-endian)
+- `pubKeyFingerprint` (8 bytes)
+- `signatureLen` (1 byte)
+- `signature` (variable)
+
+**Important**: The thaw price is always manually set by the user at thaw time. There is no stored/automatic price.
