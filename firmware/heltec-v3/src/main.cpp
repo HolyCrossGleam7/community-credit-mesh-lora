@@ -8,6 +8,8 @@
 // Heltec library
 #include "heltec.h"
 
+#include "cold_wallet.cpp"
+
 // Add these helper functions near the top of main.cpp (after includes), before setup():
 
 static bool readU32BE(const std::vector<uint8_t>& b, size_t off, uint32_t& out) {
@@ -239,6 +241,76 @@ static void sendTx(const String& sender, const String& receiver, int32_t amountM
   Serial.println();
 }
 
+static void sendColdWalletOp(const String& sender, uint8_t subtype,
+                             const String& itemName, uint16_t quantity,
+                             int32_t creditValueMinor) {
+  uint32_t nonce = esp_random();
+  const uint8_t* fp = keysFp8();
+
+  String senderTrunc = sender;
+  String itemTrunc   = itemName;
+  if (senderTrunc.length() > 20) senderTrunc = senderTrunc.substring(0, 20);
+  if (itemTrunc.length()   > 20) itemTrunc   = itemTrunc.substring(0, 20);
+
+  // Build canonical bytes for signing
+  std::vector<uint8_t> canonical;
+  canonical.push_back(PROTO_VERSION);
+  canonical.push_back(MSG_COLD_WALLET_OP);
+  canonical.push_back(subtype); // flags = subtype
+  canonical.push_back((uint8_t)senderTrunc.length());
+  for (size_t i = 0; i < senderTrunc.length(); i++) canonical.push_back((uint8_t)senderTrunc[i]);
+  canonical.push_back(subtype); // subtype field in body
+  canonical.push_back((uint8_t)itemTrunc.length());
+  for (size_t i = 0; i < itemTrunc.length(); i++) canonical.push_back((uint8_t)itemTrunc[i]);
+  // quantity (uint16 BE)
+  canonical.push_back((quantity >> 8) & 0xFF);
+  canonical.push_back(quantity & 0xFF);
+  // creditValueMinor (int32 BE)
+  canonical.push_back((creditValueMinor >> 24) & 0xFF);
+  canonical.push_back((creditValueMinor >> 16) & 0xFF);
+  canonical.push_back((creditValueMinor >>  8) & 0xFF);
+  canonical.push_back( creditValueMinor        & 0xFF);
+  // nonce (uint32 BE)
+  canonical.push_back((nonce >> 24) & 0xFF);
+  canonical.push_back((nonce >> 16) & 0xFF);
+  canonical.push_back((nonce >>  8) & 0xFF);
+  canonical.push_back( nonce        & 0xFF);
+  // fp8
+  for (int i = 0; i < 8; i++) canonical.push_back(fp[i]);
+
+  std::vector<uint8_t> packet = canonical;
+
+  // Append pubkey (65 bytes)
+  packet.push_back(65);
+  const uint8_t* pub = keysPub65();
+  for (int i = 0; i < 65; i++) packet.push_back(pub[i]);
+
+  // Sign and append DER signature
+  uint8_t sigDer[80];
+  size_t sigLen = 0;
+  if (!keysSignSha256(canonical.data(), canonical.size(), sigDer, sizeof(sigDer), sigLen) || sigLen == 0 || sigLen > 255) {
+    Serial.println("ERROR: signing failed; not sending");
+    return;
+  }
+  packet.push_back((uint8_t)sigLen);
+  for (size_t i = 0; i < sigLen; i++) packet.push_back(sigDer[i]);
+
+  Heltec.LoRa.beginPacket();
+  Heltec.LoRa.write(packet.data(), packet.size());
+  Heltec.LoRa.endPacket();
+
+  Serial.print("[COLD] Sent COLD_WALLET_OP subtype=0x0");
+  Serial.print(subtype, HEX);
+  Serial.print(" sender=");
+  Serial.print(sender);
+  Serial.print(" item=");
+  Serial.print(itemName);
+  Serial.print(" qty=");
+  Serial.print(quantity);
+  Serial.print(" creditValueMinor=");
+  Serial.println(creditValueMinor);
+}
+
 static void handleSerial() {
   if (!Serial.available()) return;
 
@@ -295,9 +367,83 @@ static void handleSerial() {
     return;
   }
 
+  // ---- FREEZE ----
+  // Usage: FREEZE:item_name:quantity:credits_spent
+  if (line.startsWith("FREEZE:")) {
+    String rest = line.substring(7);
+    int c1 = rest.indexOf(':');
+    int c2 = rest.indexOf(':', c1 + 1);
+    if (c1 < 0 || c2 < 0) {
+      Serial.println("Usage: FREEZE:item_name:quantity:credits_spent");
+      return;
+    }
+    String itemName   = rest.substring(0, c1);
+    uint16_t quantity = (uint16_t)rest.substring(c1 + 1, c2).toInt();
+    int32_t credits   = (int32_t)rest.substring(c2 + 1).toInt();
+    String deviceId   = keysFp8Hex();
+    if (coldWalletFreeze(deviceId.c_str(), itemName.c_str(), quantity, credits)) {
+      Serial.print("[COLD] Frozen ");
+      Serial.print(quantity);
+      Serial.print("x ");
+      Serial.print(itemName);
+      Serial.print(" (");
+      Serial.print(credits);
+      Serial.println(" credits spent)");
+      sendColdWalletOp(deviceId, COLD_SUBTYPE_FREEZE, itemName, quantity, credits);
+    } else {
+      Serial.println("[COLD] ERROR: freeze failed");
+    }
+    return;
+  }
+
+  // ---- THAW ----
+  // Usage: THAW:item_name:quantity:price_per_unit
+  if (line.startsWith("THAW:")) {
+    String rest = line.substring(5);
+    int c1 = rest.indexOf(':');
+    int c2 = rest.indexOf(':', c1 + 1);
+    if (c1 < 0 || c2 < 0) {
+      Serial.println("Usage: THAW:item_name:quantity:price_per_unit");
+      return;
+    }
+    String itemName         = rest.substring(0, c1);
+    uint16_t quantity       = (uint16_t)rest.substring(c1 + 1, c2).toInt();
+    int32_t pricePerUnit    = (int32_t)rest.substring(c2 + 1).toInt();
+    String deviceId         = keysFp8Hex();
+    if (coldWalletThaw(deviceId.c_str(), itemName.c_str(), quantity, pricePerUnit)) {
+      int32_t creditsReceived = (int32_t)((int64_t)quantity * pricePerUnit);
+      Serial.print("[COLD] Thawed ");
+      Serial.print(quantity);
+      Serial.print("x ");
+      Serial.print(itemName);
+      Serial.print(" @ ");
+      Serial.print(pricePerUnit);
+      Serial.print("/unit = ");
+      Serial.print(creditsReceived);
+      Serial.println(" credits");
+      sendColdWalletOp(deviceId, COLD_SUBTYPE_THAW, itemName, quantity, pricePerUnit);
+    } else {
+      Serial.println("[COLD] ERROR: thaw failed (insufficient items or item not found)");
+    }
+    return;
+  }
+
+  // ---- COLDWALLET ----
+  if (line.startsWith("COLDWALLET")) {
+    char buf[COLD_WALLET_BUF_SIZE];
+    String deviceId = keysFp8Hex();
+    coldWalletGetAll(deviceId.c_str(), buf, sizeof(buf));
+    Serial.print("[COLD] Items: ");
+    Serial.println(buf);
+    return;
+  }
+
   // ---- HELP ----
   Serial.println("Commands:");
   Serial.println("  send <sender> <receiver> <amountMinor>");
+  Serial.println("  FREEZE:item_name:quantity:credits_spent");
+  Serial.println("  THAW:item_name:quantity:price_per_unit");
+  Serial.println("  COLDWALLET");
   Serial.println("  trust list");
   Serial.println("  trust reset <sender>");
   Serial.println("  trust reset-all");
@@ -327,6 +473,8 @@ void setup() {
     Serial.print("Device fp8=");
     Serial.println(keysFp8Hex());
   }
+  coldWalletInit();
+  Serial.println("[COLD] Cold wallet initialized");
 }
 
 void loop() {
@@ -339,6 +487,127 @@ void loop() {
 
     Serial.print("RX bytes=");
     Serial.println(packetSize);
+
+    // Check for COLD_WALLET_OP (type 0x03) before TX parsing
+    if (buf.size() >= 5 && buf[0] == PROTO_VERSION && buf[1] == MSG_COLD_WALLET_OP) {
+      uint8_t subtype   = buf[2]; // flags byte holds subtype
+      uint8_t senderLen = buf[3];
+      if (senderLen <= 20 && (size_t)(5 + senderLen) <= buf.size()) {
+        String rxSender = "";
+        for (uint8_t i = 0; i < senderLen; i++) rxSender += (char)buf[5 + i];
+        size_t off = 5 + senderLen;
+        // subtype byte in body
+        if (off + 1 <= buf.size()) {
+          off += 1; // skip body subtype (same as flags)
+        }
+        // itemNameLen + itemName
+        if (off + 1 <= buf.size()) {
+          uint8_t itemNameLen = buf[off++];
+          if (itemNameLen <= 20 && off + itemNameLen <= buf.size()) {
+            String rxItem = "";
+            for (uint8_t i = 0; i < itemNameLen; i++) rxItem += (char)buf[off + i];
+            off += itemNameLen;
+            // quantity (uint16 BE)
+            uint16_t rxQty = 0;
+            if (off + 2 <= buf.size()) {
+              rxQty = ((uint16_t)buf[off] << 8) | buf[off + 1];
+              off += 2;
+            }
+            // creditValueMinor (int32 BE)
+            int32_t rxCredit = 0;
+            if (off + 4 <= buf.size()) {
+              readI32BE(buf, off, rxCredit);
+              off += 4;
+            }
+            // nonce (uint32 BE)
+            uint32_t rxNonce = 0;
+            if (off + 4 <= buf.size()) {
+              readU32BE(buf, off, rxNonce);
+              off += 4;
+            }
+            // fp8 (8 bytes) + pubLen + pub65 + sigLen + sig
+            uint8_t rxFp8[8] = {};
+            uint8_t rxPub65[65] = {};
+            uint8_t rxSigLen = 0;
+            size_t  rxSigOff = 0;
+            bool rxHasSig = false;
+            if (off + 8 + 1 + 65 + 1 <= buf.size()) {
+              for (int i = 0; i < 8; i++) rxFp8[i] = buf[off + i];
+              off += 8;
+              uint8_t rxPubLen = buf[off++];
+              if (rxPubLen == 65 && off + 65 + 1 <= buf.size()) {
+                for (int i = 0; i < 65; i++) rxPub65[i] = buf[off + i];
+                off += 65;
+                rxSigLen = buf[off++];
+                if (off + rxSigLen <= buf.size()) {
+                  rxSigOff = off;
+                  rxHasSig = true;
+                }
+              }
+            }
+            // Verify signature
+            if (rxHasSig) {
+              // Rebuild canonical bytes (must match sendColdWalletOp canonical construction)
+              std::vector<uint8_t> coldCanonical;
+              coldCanonical.push_back(PROTO_VERSION);
+              coldCanonical.push_back(MSG_COLD_WALLET_OP);
+              coldCanonical.push_back(subtype);
+              coldCanonical.push_back((uint8_t)rxSender.length());
+              for (size_t i = 0; i < (size_t)rxSender.length(); i++) coldCanonical.push_back((uint8_t)rxSender[i]);
+              coldCanonical.push_back(subtype);
+              coldCanonical.push_back((uint8_t)rxItem.length());
+              for (size_t i = 0; i < (size_t)rxItem.length(); i++) coldCanonical.push_back((uint8_t)rxItem[i]);
+              coldCanonical.push_back((rxQty >> 8) & 0xFF);
+              coldCanonical.push_back(rxQty & 0xFF);
+              coldCanonical.push_back((rxCredit >> 24) & 0xFF);
+              coldCanonical.push_back((rxCredit >> 16) & 0xFF);
+              coldCanonical.push_back((rxCredit >>  8) & 0xFF);
+              coldCanonical.push_back( rxCredit        & 0xFF);
+              coldCanonical.push_back((rxNonce >> 24) & 0xFF);
+              coldCanonical.push_back((rxNonce >> 16) & 0xFF);
+              coldCanonical.push_back((rxNonce >>  8) & 0xFF);
+              coldCanonical.push_back( rxNonce        & 0xFF);
+              for (int i = 0; i < 8; i++) coldCanonical.push_back(rxFp8[i]);
+
+              if (!verifyTxSigPub65(coldCanonical, rxPub65, buf.data() + rxSigOff, rxSigLen)) {
+                Serial.print("[COLD-RX] SIG BAD sender=");
+                Serial.println(rxSender);
+                return;
+              }
+            } else {
+              Serial.println("[COLD-RX] missing signature; dropping");
+              return;
+            }
+            if (subtype == COLD_SUBTYPE_FREEZE) {
+              Serial.print("[COLD-RX] ");
+              Serial.print(rxSender);
+              Serial.print(" froze ");
+              Serial.print(rxQty);
+              Serial.print("x ");
+              Serial.print(rxItem);
+              Serial.print(" (");
+              Serial.print(rxCredit);
+              Serial.println(" credits spent)");
+              coldWalletFreeze(rxSender.c_str(), rxItem.c_str(), rxQty, rxCredit);
+            } else if (subtype == COLD_SUBTYPE_THAW) {
+              Serial.print("[COLD-RX] ");
+              Serial.print(rxSender);
+              Serial.print(" thawed ");
+              Serial.print(rxQty);
+              Serial.print("x ");
+              Serial.print(rxItem);
+              Serial.print(" @ ");
+              Serial.print(rxCredit);
+              Serial.println("/unit (manual price)");
+              coldWalletThaw(rxSender.c_str(), rxItem.c_str(), rxQty, rxCredit);
+            } else {
+              Serial.println("[COLD-RX] Unknown subtype");
+            }
+          }
+        }
+      }
+      return;
+    }
 
     RxTxParsed p;
     if (!parseTxPacket(buf, p)) {

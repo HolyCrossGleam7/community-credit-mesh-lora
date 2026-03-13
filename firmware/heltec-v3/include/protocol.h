@@ -4,6 +4,10 @@
 
 static const uint8_t PROTO_VERSION = 0x01;
 static const uint8_t MSG_TX = 0x01;
+static const uint8_t MSG_COLD_WALLET_OP = 0x03;
+
+static const uint8_t COLD_SUBTYPE_FREEZE = 0x01;
+static const uint8_t COLD_SUBTYPE_THAW   = 0x02;
 
 struct TxFields {
   String sender;
